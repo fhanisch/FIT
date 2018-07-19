@@ -14,7 +14,7 @@ typedef enum {
 	MESSAGE_TYPE_BIT = 0x40,
 	NORMAL_HEADER_BIT = 0x80,
 	LOCAL_MESSAGE_TYPE_BITS = 0xF
-} normalHeaderFlagBits;
+} NormalHeaderFlagBits;
 
 typedef enum {
 	HEART_RATE = 3,
@@ -98,10 +98,12 @@ int main(int argc, char *argv[]) {
 	printf("\n");
 
 	unsigned int refTime = 1111;
-	float time;
-	unsigned short min;
-	float sec;
-	for (int j = 0; j < 600; j++) {
+	unsigned int check = 0;
+	unsigned char sec;
+	unsigned char min;
+	unsigned char hours;
+	unsigned short gapCount = 0;
+	for (int j = 0; j < 7000; j++) {
 		normal = readNormalHeader(file);
 		if (normal.normalHeader) {
 			printf("Compressed Timestamp Header\n");
@@ -137,23 +139,28 @@ int main(int argc, char *argv[]) {
 				if (defMsg[localMsg].globalMsgNr == 20) {
 					switch (defMsg[localMsg].fieldDefs[i].fieldDefNr) {
 					case HEART_RATE: {
-						printf("Heart Rate = %u\n", buf[0]);
+						printf("Heart Rate: %4u bpm\n", buf[0]);
 						break;
 					}
 					case SPEED: {
-						printf("Speed = %0.2f,  ", (float)(*(unsigned short*)&buf[0]) / 1000.0f*3.6f);
+						printf("Speed: %6.2f km/h    ", (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6);
 						break;
 					}
 					case DISTANCE: {
-						printf("Distance = %0.2f,  ", (float)(*(unsigned int*)&buf[0]) / 100.0f);
+						printf("Distance: %10.2f m    ", (double)(*(unsigned int*)&buf[0]) / 100.0);
 						break;
 					}
 					case TIMESTAMP: {
-						if (refTime == 1111) refTime = *(unsigned int*)&buf[0];
-						time = (float)(*(unsigned int*)&buf[0] - refTime) / 60.0f;
-						min = (unsigned short)floor(time);
-						sec = (time - (float)min)*60.0f;
-						printf("Time = %u min %2.0f sec,   ", min, sec);
+						if (refTime == 1111) {
+							refTime = *(unsigned int*)&buf[0];
+							check = refTime;
+						}
+						if (*(unsigned int*)&buf[0] - check > 1) gapCount++;
+						check = *(unsigned int*)&buf[0];
+						sec = (unsigned char)((*(unsigned int*)&buf[0] - refTime) % 60);
+						min = (unsigned char)(((*(unsigned int*)&buf[0] - refTime) / 60) % 60);
+						hours = (unsigned char)(((*(unsigned int*)&buf[0] - refTime) / 60) / 60);
+						printf("Time: %02u:%02u:%02u    ", hours, min, sec);
 						break;
 					}
 					}
@@ -161,7 +168,7 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
-
+	printf("Gap Count: %u\n", gapCount);
 	fclose(file);
 
 	return 0;
