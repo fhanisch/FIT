@@ -51,10 +51,13 @@ typedef struct {
 	FieldDef *fieldDefs;
 } DefMsg;
 
+size_t numBytes = 0;
+
 NormalHeader readNormalHeader(FILE *file) {
 	unsigned char byte;
 	NormalHeader normalHeader;
 	fread(&byte, 1, 1, file);
+	numBytes++;
 	if (byte & NORMAL_HEADER_BIT) normalHeader.normalHeader = 1;
 	else normalHeader.normalHeader = 0;
 	if (byte & MESSAGE_TYPE_BIT) normalHeader.messageType = 1;
@@ -78,6 +81,7 @@ int main(int argc, char *argv[]) {
 	unsigned char localMsg;
 	DefMsg defMsg[16];
 	unsigned char buf[256];
+	int fileSize;
 
 	if (argc < 2) {
 		printf("usage: decode.exe <fit file>\n");
@@ -86,8 +90,13 @@ int main(int argc, char *argv[]) {
 	FILE *file = fopen(argv[1], "rb");
 	printf("Size of unsigned short: %llu\n", sizeof(unsigned short));
 	printf("Size of Header: %llu\n\n", sizeof(Header));
+	fseek(file, 0, SEEK_END);
+	fileSize = ftell(file);
+	rewind(file);
+	printf("File Size:        %d\n\n", fileSize);
 
 	fread(&header, 14, 1, file);
+	numBytes += 14;
 	printf("HeaderSize:       %u\n", header.headerSize);
 	printf("Protocol Version: %u\n", header.protocolVersion);
 	printf("Profile Version:  %u\n", header.profileVersion);
@@ -103,7 +112,7 @@ int main(int argc, char *argv[]) {
 	unsigned char min;
 	unsigned char hours;
 	unsigned short gapCount = 0;
-	for (int j = 0; j < 7000; j++) {
+	while (numBytes < fileSize-2) {
 		normal = readNormalHeader(file);
 		if (normal.normalHeader) {
 			printf("Compressed Timestamp Header\n");
@@ -116,6 +125,7 @@ int main(int argc, char *argv[]) {
 		localMsg = normal.localMessageType;
 		if (normal.messageType) {
 			fread(buf, 5, 1, file);
+			numBytes += 5;
 			defMsg[localMsg].globalMsgNr = *(unsigned short*)(&buf[2]);
 			defMsg[localMsg].fieldCount = buf[4];
 			/*
@@ -126,6 +136,7 @@ int main(int argc, char *argv[]) {
 			*/
 			defMsg[localMsg].fieldDefs = malloc(defMsg[localMsg].fieldCount * 3);
 			fread(defMsg[localMsg].fieldDefs, defMsg[localMsg].fieldCount * 3, 1, file);
+			numBytes += defMsg[localMsg].fieldCount * 3;
 		}
 		else {
 			for (int i = 0; i < defMsg[localMsg].fieldCount; i++) {
@@ -136,6 +147,7 @@ int main(int argc, char *argv[]) {
 				printf("\tBase Type:    0x%x\n", defMsg[localMsg].fieldDefs[i].baseType);
 				*/
 				fread(buf, defMsg[localMsg].fieldDefs[i].size, 1, file);
+				numBytes += defMsg[localMsg].fieldDefs[i].size;
 				if (defMsg[localMsg].globalMsgNr == 20) {
 					switch (defMsg[localMsg].fieldDefs[i].fieldDefNr) {
 					case HEART_RATE: {
@@ -143,11 +155,11 @@ int main(int argc, char *argv[]) {
 						break;
 					}
 					case SPEED: {
-						printf("Speed: %6.2f km/h    ", (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6);
+						printf("Speed: %6.2lf km/h    ", (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6);
 						break;
 					}
 					case DISTANCE: {
-						printf("Distance: %10.2f m    ", (double)(*(unsigned int*)&buf[0]) / 100.0);
+						printf("Distance: %10.2lf m    ", (double)(*(unsigned int*)&buf[0]) / 100.0);
 						break;
 					}
 					case TIMESTAMP: {
