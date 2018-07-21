@@ -17,11 +17,37 @@ typedef enum {
 } NormalHeaderFlagBits;
 
 typedef enum {
+	SESSION = 18,
+	LAP = 19,
+	RECORD = 20
+} MESG_NUM;
+
+typedef enum {
 	HEART_RATE = 3,
 	DISTANCE = 5,
 	SPEED = 6,
 	TIMESTAMP = 253
-} RecordFields;
+} EnumRecordFields;
+
+typedef enum {
+	MESSAGE_INDEX = 254,
+	TOTAL_ELAPSED_TIME = 7,
+	TOTAL_DISTANCE = 9,
+	AVG_SPEED = 14,
+	MAX_SPEED = 15,
+	AVG_HEART_RATE = 16,
+	MAX_HEART_RATE = 17
+} EnumSessionFields;
+
+typedef struct {
+	unsigned short index;
+	unsigned int time; // [s]
+	double distance; // [km]
+	double avgSpeed; // [km/h]
+	double maxSpeed; // [km/h]
+	unsigned char avgHR; // [bpm]
+	unsigned char maxHR; // [bpm]
+} SessionFields;
 
 typedef struct {
 	unsigned char headerSize;
@@ -51,7 +77,26 @@ typedef struct {
 	FieldDef *fieldDefs;
 } DefMsg;
 
+typedef struct {
+	unsigned char sec;
+	unsigned char min;
+	unsigned char hours;
+} Time;
+
+typedef struct {
+	unsigned char delta;
+	unsigned int timeStamp;
+} GapInfo;
+
 size_t numBytes = 0;
+
+Time getTime(unsigned int t) {
+	Time time;
+	time.sec = (unsigned char)(t % 60);
+	time.min = (unsigned char)((t / 60) % 60);
+	time.hours = (unsigned char)((t / 60) / 60);
+	return time;
+}
 
 NormalHeader readNormalHeader(FILE *file) {
 	unsigned char byte;
@@ -108,10 +153,10 @@ int main(int argc, char *argv[]) {
 
 	unsigned int refTime = 1111;
 	unsigned int check = 0;
-	unsigned char sec;
-	unsigned char min;
-	unsigned char hours;
-	unsigned short gapCount = 0;
+	Time time;
+	GapInfo gap[256];
+	unsigned char gapCount = 0;
+	SessionFields sessionFields = {1111,1111,-1,-1,-1,0,0};
 	while (numBytes < fileSize-2) {
 		normal = readNormalHeader(file);
 		if (normal.normalHeader) {
@@ -148,40 +193,95 @@ int main(int argc, char *argv[]) {
 				*/
 				fread(buf, defMsg[localMsg].fieldDefs[i].size, 1, file);
 				numBytes += defMsg[localMsg].fieldDefs[i].size;
-				if (defMsg[localMsg].globalMsgNr == 20) {
-					switch (defMsg[localMsg].fieldDefs[i].fieldDefNr) {
-					case HEART_RATE: {
-						printf("Heart Rate: %4u bpm\n", buf[0]);
-						break;
-					}
-					case SPEED: {
-						printf("Speed: %6.2lf km/h    ", (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6);
-						break;
-					}
-					case DISTANCE: {
-						printf("Distance: %10.2lf m    ", (double)(*(unsigned int*)&buf[0]) / 100.0);
-						break;
-					}
-					case TIMESTAMP: {
-						if (refTime == 1111) {
-							refTime = *(unsigned int*)&buf[0];
-							check = refTime;
+				switch (defMsg[localMsg].globalMsgNr) {
+					case RECORD: {
+						switch (defMsg[localMsg].fieldDefs[i].fieldDefNr) {
+							case HEART_RATE: {
+								printf("Heart Rate: %4u bpm\n", buf[0]);
+								break;
+							}
+							case SPEED: {
+								printf("Speed: %6.2lf km/h    ", (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6);
+								break;
+							}
+							case DISTANCE: {
+								printf("Distance: %10.2lf m    ", (double)(*(unsigned int*)&buf[0]) / 100.0);
+								break;
+							}
+							case TIMESTAMP: {
+								if (refTime == 1111) {
+									refTime = *(unsigned int*)&buf[0];
+									check = refTime;
+								}
+								if (*(unsigned int*)&buf[0] - check > 1) {
+									gap[gapCount].delta = (unsigned char)(*(unsigned int*)&buf[0] - check);
+									gap[gapCount].timeStamp = *(unsigned int*)&buf[0];
+									gapCount++;
+								}
+								check = *(unsigned int*)&buf[0];
+								time = getTime(*(unsigned int*)&buf[0] - refTime);
+								printf("Time: %02u:%02u:%02u    ", time.hours, time.min, time.sec);
+								break;
+							}
 						}
-						if (*(unsigned int*)&buf[0] - check > 1) gapCount++;
-						check = *(unsigned int*)&buf[0];
-						sec = (unsigned char)((*(unsigned int*)&buf[0] - refTime) % 60);
-						min = (unsigned char)(((*(unsigned int*)&buf[0] - refTime) / 60) % 60);
-						hours = (unsigned char)(((*(unsigned int*)&buf[0] - refTime) / 60) / 60);
-						printf("Time: %02u:%02u:%02u    ", hours, min, sec);
 						break;
 					}
+					case SESSION: {
+						switch (defMsg[localMsg].fieldDefs[i].fieldDefNr) {
+							case MESSAGE_INDEX: {
+								sessionFields.index = *(unsigned short*)&buf[0] & 0x0fff;
+								break;
+							}
+							case TOTAL_ELAPSED_TIME: {
+								sessionFields.time = *(unsigned int*)&buf[0] / 1000;
+								break;
+							}
+							case TOTAL_DISTANCE: {
+								sessionFields.distance = (double)(*(unsigned int*)&buf[0]) / 100000.0;
+								break;
+							}
+							case AVG_SPEED: {
+								sessionFields.avgSpeed = (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6;
+								break;
+							}
+							case MAX_SPEED: {
+								sessionFields.maxSpeed = (double)(*(unsigned short*)&buf[0]) / 1000.0*3.6;
+								break;
+							}
+							case AVG_HEART_RATE: {
+								sessionFields.avgHR = buf[0];
+								break;
+							}
+							case MAX_HEART_RATE: {
+								sessionFields.maxHR = buf[0];
+								break;
+							}
+						}
+						break;
 					}
 				}
 			}
 		}
 	}
-	printf("Gap Count: %u\n", gapCount);
 	fclose(file);
+	printf("\n");
+	printf("Session:\n");
+	time = getTime(sessionFields.time);
+	printf("\tIndex:              %u\n", sessionFields.index);
+	printf("\tTime:               %02u:%02u:%02u\n", time.hours, time.min, time.sec);
+	printf("\tDistance:           %0.3lf km\n", sessionFields.distance);
+	printf("\tAverage Speed:      %0.2lf km/h\n", sessionFields.avgSpeed);
+	printf("\tMaximum Speed:      %0.2lf km/h\n", sessionFields.maxSpeed);
+	printf("\tAverage Heart Rate: %u bpm\n", sessionFields.avgHR);
+	printf("\tMaximum Heart Rate: %u bpm\n", sessionFields.maxHR);
+	printf("\n");
+	for (int i = 0; i < gapCount; i++) {
+		printf("Gap #%u:\n", i+1);
+		printf("\tDelta: %u sec\n", gap[i].delta);
+		time = getTime(gap[i].timeStamp - refTime);
+		printf("\tTime: %02u:%02u:%02u\n", time.hours, time.min, time.sec);
+		printf("\n");
+	}
 
 	return 0;
 }
